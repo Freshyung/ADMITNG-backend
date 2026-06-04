@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import mysql, { PoolOptions } from 'mysql2/promise';
+import fs from 'fs';
 
 const app = express();
 app.use(cors());
@@ -13,6 +14,7 @@ const poolOptions: PoolOptions = {
   database: process.env.DB_HOST ? process.env.DB_NAME : 'futa_calculator',
   port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 3306,
   waitForConnections: true,
+  multipleStatements: true,
   ...(process.env.DB_HOST && { ssl: { rejectUnauthorized: false } })
 };
 
@@ -20,29 +22,15 @@ const pool = mysql.createPool(poolOptions);
 
 async function initDatabase() {
   try {
-    console.log("Checking and seeding database tables...");
+    console.log("Reading SQL backup file...");
     
-    // 1. Create Departments Table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS departments (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        cut_off_mark DECIMAL(5,2) NOT NULL
-      )
-    `);
-
-    // 2. Create Requirements Table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS requirements (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        department_id INT,
-        jamb_subjects VARCHAR(255),
-        olevel_subjects VARCHAR(255),
-        FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
-      )
-    `);
-
-    console.log("Database tables verified successfully!");
+    // Read the backup file we pushed to GitHub
+    const sqlString = fs.readFileSync('futa_backup.sql', 'utf8');
+    
+    // Execute the entire file to insert all your FUTA data
+    await pool.query(sqlString);
+    
+    console.log("FUTA Data successfully injected into Aiven!");
   } catch (err) {
     console.error("Error seeding database:", err);
   }
