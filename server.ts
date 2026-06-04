@@ -18,6 +18,39 @@ const poolOptions: PoolOptions = {
 
 const pool = mysql.createPool(poolOptions);
 
+async function initDatabase() {
+  try {
+    console.log("Checking and seeding database tables...");
+    
+    // 1. Create Departments Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS departments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        cut_off_mark DECIMAL(5,2) NOT NULL
+      )
+    `);
+
+    // 2. Create Requirements Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS requirements (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        department_id INT,
+        jamb_subjects VARCHAR(255),
+        olevel_subjects VARCHAR(255),
+        FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+      )
+    `);
+
+    console.log("Database tables verified successfully!");
+  } catch (err) {
+    console.error("Error seeding database:", err);
+  }
+}
+
+// Execute the initializer
+initDatabase();
+
 app.get('/api/courses', async (req: Request, res: Response) => {
   try {
     const [rows] = await pool.query(`
