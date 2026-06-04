@@ -1,19 +1,22 @@
 import express, { Request, Response } from 'express';
-import mysql from 'mysql2/promise';
 import cors from 'cors';
+import mysql, { PoolOptions } from 'mysql2/promise';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// This connects directly to the MySQL Server I installed
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: 'Freshnation2',
-  database: 'futa_calculator',
+const poolOptions: PoolOptions = {
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || 'Freshnation2',
+  database: process.env.DB_HOST ? process.env.DB_NAME : 'futa_calculator',
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 3306,
   waitForConnections: true,
-});
+  ...(process.env.DB_HOST && { ssl: { rejectUnauthorized: false } })
+};
+
+const pool = mysql.createPool(poolOptions);
 
 app.get('/api/courses', async (req: Request, res: Response) => {
   try {
