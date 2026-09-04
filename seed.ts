@@ -1,11 +1,28 @@
 import mysql from 'mysql2/promise';
+import path from 'path';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+const missingEnvVars = requiredEnvVars.filter(
+  (key) => !process.env[key] || process.env[key]?.trim() === ''
+);
+
+if (missingEnvVars.length > 0) {
+  throw new Error(
+    `Missing required environment variables: ${missingEnvVars.join(', ')}. Create a local .env file at the project root and keep it out of version control.`
+  );
+}
 
 async function seedDatabase() {
   const connection = await mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: 'Freshnation2',
-    database: 'futa_calculator'
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    port: Number(process.env.DB_PORT ?? 3306),
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined
   }) as any;
 
   console.log('🔌 Connected. Purging old data to inject the Complete 2026/2027 Session Matrix...');
