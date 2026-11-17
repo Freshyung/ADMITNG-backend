@@ -6,16 +6,44 @@ import path from 'path';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config(); // Also check current directory .env if present
 
-const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
-const missingEnvVars = requiredEnvVars.filter(
-  (key) => !process.env[key] || process.env[key]?.trim() === ''
-);
+let poolOptions: PoolOptions;
 
-if (missingEnvVars.length > 0) {
-  throw new Error(
-    `Missing required environment variables: ${missingEnvVars.join(', ')}. Create a local .env file at the project root and keep it out of version control.`
+if (process.env.DATABASE_URL) {
+  const dbUrl = new URL(process.env.DATABASE_URL);
+  poolOptions = {
+    host: dbUrl.hostname,
+    user: decodeURIComponent(dbUrl.username),
+    password: decodeURIComponent(dbUrl.password),
+    database: dbUrl.pathname.replace(/^\//, ''),
+    port: Number(dbUrl.port || 3306),
+    waitForConnections: true,
+    multipleStatements: true,
+    ssl: { rejectUnauthorized: false },
+  };
+} else {
+  const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+  const missingEnvVars = requiredEnvVars.filter(
+    (key) => !process.env[key] || process.env[key]?.trim() === ''
   );
+
+  if (missingEnvVars.length > 0) {
+    throw new Error(
+      `Missing required environment variables: DATABASE_URL or (${missingEnvVars.join(', ')}).`
+    );
+  }
+
+  poolOptions = {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    port: Number(process.env.DB_PORT ?? 3306),
+    waitForConnections: true,
+    multipleStatements: true,
+    ...(process.env.DB_SSL === 'true' && { ssl: { rejectUnauthorized: false } }),
+  };
 }
 
 const app = express();
@@ -39,17 +67,6 @@ app.use(
   })
 );
 app.use(express.json());
-
-const poolOptions: PoolOptions = {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: Number(process.env.DB_PORT ?? 3306),
-  waitForConnections: true,
-  multipleStatements: true,
-  ...(process.env.DB_SSL === 'true' && { ssl: { rejectUnauthorized: false } })
-};
 
 const pool = mysql.createPool(poolOptions);
 
