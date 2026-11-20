@@ -1,50 +1,28 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import mysql, { PoolOptions } from 'mysql2/promise';
-import fs from 'fs';
+import { Pool, types } from 'pg';
 import path from 'path';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config(); // Also check current directory .env if present
+dotenv.config();
 
-let poolOptions: PoolOptions;
+// Parse PostgreSQL NUMERIC(5,2) (OID 1700) as float so range_low & range_high stay numbers
+types.setTypeParser(1700, (val: string) => parseFloat(val));
 
-if (process.env.DATABASE_URL) {
-  const dbUrl = new URL(process.env.DATABASE_URL);
-  poolOptions = {
-    host: dbUrl.hostname,
-    user: decodeURIComponent(dbUrl.username),
-    password: decodeURIComponent(dbUrl.password),
-    database: dbUrl.pathname.replace(/^\//, ''),
-    port: Number(dbUrl.port || 3306),
-    waitForConnections: true,
-    multipleStatements: true,
-    ssl: { rejectUnauthorized: false },
-  };
-} else {
-  const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
-  const missingEnvVars = requiredEnvVars.filter(
-    (key) => !process.env[key] || process.env[key]?.trim() === ''
+if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim() === '') {
+  throw new Error(
+    'Missing required environment variable: DATABASE_URL. Set it in .env locally and in Render Environment Variables.'
   );
-
-  if (missingEnvVars.length > 0) {
-    throw new Error(
-      `Missing required environment variables: DATABASE_URL or (${missingEnvVars.join(', ')}).`
-    );
-  }
-
-  poolOptions = {
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT ?? 3306),
-    waitForConnections: true,
-    multipleStatements: true,
-    ...(process.env.DB_SSL === 'true' && { ssl: { rejectUnauthorized: false } }),
-  };
 }
+
+const dbUrl = new URL(process.env.DATABASE_URL);
+dbUrl.searchParams.delete('sslmode');
+
+const pool = new Pool({
+  connectionString: dbUrl.toString(),
+  ssl: { rejectUnauthorized: false },
+});
 
 const app = express();
 const allowedOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173')
@@ -68,8 +46,6 @@ app.use(
 );
 app.use(express.json());
 
-const pool = mysql.createPool(poolOptions);
-
 let courseCache: { data: any[]; expiresAt: number } | null = null;
 const COURSE_CACHE_TTL_MS = 1000 * 60 * 5;
 
@@ -80,45 +56,32 @@ async function getCoursesFromDatabase() {
     return courseCache.data;
   }
 
-  const [rows] = await pool.query(`
+  const { rows } = await pool.query(`
     SELECT d.*, r.jamb_subjects, r.olevel_subjects 
     FROM departments d
     LEFT JOIN requirements r ON d.id = r.department_id
+    ORDER BY d.id ASC
   `);
 
   courseCache = {
-    data: rows as any[],
+    data: rows,
     expiresAt: now + COURSE_CACHE_TTL_MS,
   };
 
   return courseCache.data;
 }
 
-async function initDatabase() {
-  if (process.env.SEED_ON_START !== 'true') {
-    console.log('Database seeding is disabled. Set SEED_ON_START=true to initialize from the SQL backup.');
-    return;
-  }
-
+app.get('/api/health', async (_req: Request, res: Response) => {
   try {
-    const sqlPath = path.resolve(__dirname, './futa_backup.sql');
-    if (!fs.existsSync(sqlPath)) {
-      console.warn(`SQL backup not found at ${sqlPath}. Skipping seed.`);
-      return;
-    }
-
-    console.log('Reading SQL backup file...');
-    const sqlString = fs.readFileSync(sqlPath, 'utf8');
-    await pool.query(sqlString);
-    console.log('FUTA data successfully injected into the configured database.');
-  } catch (err) {
-    console.error('Error seeding database:', err);
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', database: 'postgresql' });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    res.status(500).json({ status: 'error', database: 'disconnected' });
   }
-}
+});
 
-initDatabase();
-
-app.get('/api/courses', async (req: Request, res: Response) => {
+app.get('/api/courses', async (_req: Request, res: Response) => {
   try {
     const rows = await getCoursesFromDatabase();
     res.json(rows);

@@ -11,45 +11,33 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a, _b, _c, _d;
+var _a, _b, _c;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
-const promise_1 = __importDefault(require("mysql2/promise"));
-const fs_1 = __importDefault(require("fs"));
+const pg_1 = require("pg");
 const path_1 = __importDefault(require("path"));
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config({ path: path_1.default.resolve(__dirname, '../.env') });
-dotenv_1.default.config(); // Also check current directory .env if present
-let poolOptions;
-if (process.env.DATABASE_URL) {
-    const dbUrl = new URL(process.env.DATABASE_URL);
-    poolOptions = {
-        host: dbUrl.hostname,
-        user: decodeURIComponent(dbUrl.username),
-        password: decodeURIComponent(dbUrl.password),
-        database: dbUrl.pathname.replace(/^\//, ''),
-        port: Number(dbUrl.port || 3306),
-        waitForConnections: true,
-        multipleStatements: true,
-        ssl: { rejectUnauthorized: false },
-    };
+dotenv_1.default.config();
+// Parse PostgreSQL NUMERIC(5,2) (OID 1700) as float so range_low & range_high stay numbers
+pg_1.types.setTypeParser(1700, (val) => parseFloat(val));
+if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim() === '') {
+    throw new Error('Missing required environment variable: DATABASE_URL. Set it in .env locally and in Render Environment Variables.');
 }
-else {
-    const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
-    const missingEnvVars = requiredEnvVars.filter((key) => { var _a; return !process.env[key] || ((_a = process.env[key]) === null || _a === void 0 ? void 0 : _a.trim()) === ''; });
-    if (missingEnvVars.length > 0) {
-        throw new Error(`Missing required environment variables: DATABASE_URL or (${missingEnvVars.join(', ')}).`);
-    }
-    poolOptions = Object.assign({ host: process.env.DB_HOST, user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, port: Number((_a = process.env.DB_PORT) !== null && _a !== void 0 ? _a : 3306), waitForConnections: true, multipleStatements: true }, (process.env.DB_SSL === 'true' && { ssl: { rejectUnauthorized: false } }));
-}
+const dbUrl = new URL(process.env.DATABASE_URL);
+dbUrl.searchParams.delete('sslmode');
+const pool = new pg_1.Pool({
+    connectionString: dbUrl.toString(),
+    ssl: { rejectUnauthorized: false },
+});
 const app = (0, express_1.default)();
-const allowedOrigins = ((_b = process.env.CORS_ORIGIN) !== null && _b !== void 0 ? _b : 'http://localhost:5173,http://127.0.0.1:5173')
+const allowedOrigins = ((_a = process.env.CORS_ORIGIN) !== null && _a !== void 0 ? _a : 'http://localhost:5173,http://127.0.0.1:5173')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-const host = (_c = process.env.HOST) !== null && _c !== void 0 ? _c : '0.0.0.0';
-const port = Number((_d = process.env.PORT) !== null && _d !== void 0 ? _d : 3001);
+const host = (_b = process.env.HOST) !== null && _b !== void 0 ? _b : '0.0.0.0';
+const port = Number((_c = process.env.PORT) !== null && _c !== void 0 ? _c : 3001);
 app.disable('x-powered-by');
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
@@ -62,7 +50,6 @@ app.use((0, cors_1.default)({
     credentials: true,
 }));
 app.use(express_1.default.json());
-const pool = promise_1.default.createPool(poolOptions);
 let courseCache = null;
 const COURSE_CACHE_TTL_MS = 1000 * 60 * 5;
 function getCoursesFromDatabase() {
@@ -71,10 +58,11 @@ function getCoursesFromDatabase() {
         if (courseCache && courseCache.expiresAt > now) {
             return courseCache.data;
         }
-        const [rows] = yield pool.query(`
+        const { rows } = yield pool.query(`
     SELECT d.*, r.jamb_subjects, r.olevel_subjects 
     FROM departments d
     LEFT JOIN requirements r ON d.id = r.department_id
+    ORDER BY d.id ASC
   `);
         courseCache = {
             data: rows,
@@ -83,30 +71,17 @@ function getCoursesFromDatabase() {
         return courseCache.data;
     });
 }
-function initDatabase() {
-    return __awaiter(this, void 0, void 0, function* () {
-        if (process.env.SEED_ON_START !== 'true') {
-            console.log('Database seeding is disabled. Set SEED_ON_START=true to initialize from the SQL backup.');
-            return;
-        }
-        try {
-            const sqlPath = path_1.default.resolve(__dirname, './futa_backup.sql');
-            if (!fs_1.default.existsSync(sqlPath)) {
-                console.warn(`SQL backup not found at ${sqlPath}. Skipping seed.`);
-                return;
-            }
-            console.log('Reading SQL backup file...');
-            const sqlString = fs_1.default.readFileSync(sqlPath, 'utf8');
-            yield pool.query(sqlString);
-            console.log('FUTA data successfully injected into the configured database.');
-        }
-        catch (err) {
-            console.error('Error seeding database:', err);
-        }
-    });
-}
-initDatabase();
-app.get('/api/courses', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.get('/api/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        yield pool.query('SELECT 1');
+        res.json({ status: 'ok', database: 'postgresql' });
+    }
+    catch (error) {
+        console.error('Health check failed:', error);
+        res.status(500).json({ status: 'error', database: 'disconnected' });
+    }
+}));
+app.get('/api/courses', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const rows = yield getCoursesFromDatabase();
         res.json(rows);
